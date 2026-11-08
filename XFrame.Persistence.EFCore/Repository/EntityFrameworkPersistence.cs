@@ -135,7 +135,16 @@ namespace XFrame.Persistence.EFCore
         {
             try
             {
-                _context.Update(domain);
+                var entry = _context.Entry(domain);
+                if (entry.State == EntityState.Detached)
+                {
+                    _context.Update(domain);
+                }
+                else
+                {
+                    entry.State = EntityState.Modified;
+                }
+
                 await _context.SaveChangesAsync(cancellationToken)
                     .ConfigureAwait(false);
             }
