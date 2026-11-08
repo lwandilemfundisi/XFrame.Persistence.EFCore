@@ -110,6 +110,14 @@ namespace XFrame.Persistence.EFCore
 
         private static Expression BuildExpression<TDomain>(BaseFilter filter, ParameterExpression parameter) where TDomain : class
         {
+            var andFilter = filter as AndFilter;
+            if (andFilter.IsNotNull())
+            {
+                return Expression.AndAlso(
+                    BuildExpression<TDomain>(andFilter.LeftFilter, parameter),
+                    BuildExpression<TDomain>(andFilter.RightFilter, parameter));
+            }
+
             var equalityFilter = filter as EqualityFilter;
             if (equalityFilter.IsNotNull())
             {
