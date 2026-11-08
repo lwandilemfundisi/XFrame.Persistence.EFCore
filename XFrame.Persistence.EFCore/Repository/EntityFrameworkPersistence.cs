@@ -139,10 +139,35 @@ namespace XFrame.Persistence.EFCore
 
                 if (entry.State == EntityState.Detached)
                 {
-                    _context.Attach(domain);
-                }
+                    _context.ChangeTracker.TrackGraph(domain, node =>
+                    {
+                        if (node.Entry.Entity == domain)
+                        {
+                            node.Entry.State = EntityState.Modified;
+                            return;
+                        }
 
-                entry.State = EntityState.Modified;
+                        var primaryKeyProperty = node.Entry.Metadata.FindPrimaryKey().Properties[0];
+                        var primaryKeyValue = node.Entry.CurrentValues[primaryKeyProperty];
+
+                        var isExisting = node.Entry.IsKeySet &&
+                                         _context.Find(node.Entry.Metadata.ClrType, primaryKeyValue) != null;
+
+                        if (isExisting)
+                        {
+                            node.Entry.State = EntityState.Modified;
+                        }
+                        else
+                        {
+                            node.Entry.State = EntityState.Added;
+                        }
+                    });
+
+                }
+                else
+                {
+                    entry.State = EntityState.Modified;
+                }
 
                 await _context.SaveChangesAsync(cancellationToken)
                     .ConfigureAwait(false);
@@ -164,6 +189,7 @@ namespace XFrame.Persistence.EFCore
                 throw;
             }
         }
+
 
     }
 }
