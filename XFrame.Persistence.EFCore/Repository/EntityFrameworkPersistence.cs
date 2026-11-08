@@ -136,32 +136,34 @@ namespace XFrame.Persistence.EFCore
             try
             {
                 var entry = _context.Entry(domain);
+
                 if (entry.State == EntityState.Detached)
                 {
-                    _context.Update(domain);
+                    _context.Attach(domain);
                 }
-                else
-                {
-                    entry.State = EntityState.Modified;
-                }
+
+                entry.State = EntityState.Modified;
 
                 await _context.SaveChangesAsync(cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation(_strategy))
             {
+                var id = domain.GetType().GetProperty("Id")?.GetValue(domain) ?? "Unknown";
                 _logger.LogError(
                     "Entity Framework event update detected an optimistic concurrency " +
-                    "exception for entity with ID '{0}'", domain.GetType().GetProperty("Id").GetValue(domain));
+                    "exception for entity with ID '{0}'", id);
                 throw new OptimisticConcurrencyException(ex.Message, ex);
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
+                var id = domain.GetType().GetProperty("Id")?.GetValue(domain) ?? "Unknown";
                 _logger.LogError(
                     "Entity Framework update detected an " +
-                    "exception for entity with ID '{0}', message : {1}", domain.GetType().GetProperty("Id").GetValue(domain), ex);
+                    "exception for entity with ID '{0}', message : {1}", id, ex.Message);
                 throw;
             }
         }
+
     }
 }
