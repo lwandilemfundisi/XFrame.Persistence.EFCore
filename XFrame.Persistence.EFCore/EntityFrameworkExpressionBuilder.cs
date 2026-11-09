@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using System.Linq.Expressions;
 using XFrame.Common.Extensions;
 using XFrame.Persistence.EFCore.Queries.Filtering;
@@ -110,132 +110,174 @@ namespace XFrame.Persistence.EFCore
 
         private static Expression BuildExpression<TDomain>(BaseFilter filter, ParameterExpression parameter) where TDomain : class
         {
-            var andFilter = filter as AndFilter;
-            if (andFilter.IsNotNull())
+            if (filter is LogicalFilter logicalFilter)
+            {
+                var children = logicalFilter.Filters
+                    .Select(child => BuildExpression<TDomain>(child, parameter))
+                    .ToArray();
+
+                if (children.Any(child => child is null))
+                    throw new NotSupportedException("A filter node could not be translated into an EF Core expression.");
+
+                return logicalFilter.Operator switch
+                {
+                    FilterLogicalOperator.And => children.Aggregate(Expression.AndAlso),
+                    FilterLogicalOperator.Or => children.Aggregate(Expression.OrElse),
+                    FilterLogicalOperator.Not => Expression.Not(children[0]),
+                    _ => throw new NotSupportedException($"Unsupported logical operator: {logicalFilter.Operator}.")
+                };
+            }
+
+            if (filter is AndFilter andFilter)
             {
                 return Expression.AndAlso(
                     BuildExpression<TDomain>(andFilter.LeftFilter, parameter),
                     BuildExpression<TDomain>(andFilter.RightFilter, parameter));
             }
 
-            var equalityFilter = filter as EqualityFilter;
-            if (equalityFilter.IsNotNull())
-            {
+            if (filter is EqualityFilter equalityFilter)
                 return ResolveEqualityFilter(equalityFilter, parameter);
-            }
 
-            var nullFilter = filter as NullFilter;
-            if (nullFilter.IsNotNull())
-            {
-                return Expression.Equal(Expression.Property(parameter, nullFilter.Property), Expression.Constant(null));
-            }
+            if (filter is NullFilter nullFilter)
+                return NullCheck(GetProperty(parameter, nullFilter.Property), isNull: true);
 
-            return null;
+            throw new NotSupportedException($"Filter type '{filter.GetType().FullName}' is not supported by the EF Core expression builder.");
         }
 
-        private static Expression ResolveEqualityFilter(EqualityFilter equalityFilter, ParameterExpression parameter)
+        private static Expression ResolveEqualityFilter(EqualityFilter filter, ParameterExpression parameter)
         {
-            switch (equalityFilter.Filter)
+            var member = GetProperty(parameter, filter.Property);
+            var value = filter.Value;
+
+            switch (filter.Filter)
             {
                 case FilterType.Equal:
-                    {
-                        return Expression.Equal(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(equalityFilter.Value));
-                    }
-                case FilterType.NotNull:
-                    {
-                        return Expression.NotEqual(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(null));
-                    }
-                case FilterType.NotEmpty:
-                    {
-                        return Expression.Equal(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(string.Empty));
-                    }
-                case FilterType.Null:
-                    {
-                        return Expression.Equal(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(null));
-                    }
-                case FilterType.Like:
-                    {
-                        return Expression.Equal(
-                            Expression.Call(
-                                Expression.Property(parameter, equalityFilter.Property), 
-                                typeof(string).GetMethod("Contains", new[] { typeof(string) }), 
-                                new Expression[] { Expression.Constant(equalityFilter.Value as string) }), 
-                            Expression.Constant(true));
-                    }
-                case FilterType.GreaterThanOrEqualTo:
-                    {
-                        return Expression.GreaterThanOrEqual(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(equalityFilter.Value));
-                    }
-                case FilterType.GreaterThan:
-                    {
-                        return Expression.GreaterThan(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(equalityFilter.Value));
-                    }
-                case FilterType.LessThanOrEqualTo:
-                    {
-                        return Expression.LessThanOrEqual(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(equalityFilter.Value));
-                    }
-                case FilterType.LessThan:
-                    {
-                        return Expression.LessThan(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(equalityFilter.Value));
-                    }
+                    return value is null ? NullCheck(member, isNull: true) : Expression.Equal(member, CreateTypedConstant(value, member.Type));
                 case FilterType.NotEqual:
-                    {
-                        return Expression.NotEqual(
-                            Expression.Property(parameter, equalityFilter.Property), 
-                            Expression.Constant(equalityFilter.Value));
-                    }
-                case FilterType.In:
-                    {
-                        var valueType = equalityFilter.Value.GetType();
-
-                        return Expression.Equal(
-                            Expression.Call(
-                                Expression.Constant(equalityFilter.Value),
-                                valueType.GetMethod("Contains", new[] { valueType.GetGenericArguments()[0] }),
-                                new Expression[] { Expression.Property(parameter, equalityFilter.Property) }),
-                            Expression.Constant(true));
-                    }
-                case FilterType.NotIn:
-                    {
-                        var valueType = equalityFilter.Value.GetType();
-
-                        return Expression.NotEqual(
-                            Expression.Call(
-                                Expression.Constant(equalityFilter.Value),
-                                valueType.GetMethod("Contains", new[] { valueType.GetGenericArguments()[0] }),
-                                new Expression[] { Expression.Property(parameter, equalityFilter.Property) }),
-                            Expression.Constant(true));
-                    }
+                    return value is null ? NullCheck(member, isNull: false) : Expression.NotEqual(member, CreateTypedConstant(value, member.Type));
+                case FilterType.Null:
+                    return NullCheck(member, isNull: true);
+                case FilterType.NotNull:
+                    return NullCheck(member, isNull: false);
+                case FilterType.NotEmpty:
+                    if (member.Type != typeof(string))
+                        throw new InvalidOperationException("NotEmpty can only be applied to string properties.");
+                    return Expression.AndAlso(
+                        Expression.NotEqual(member, Expression.Constant(null, typeof(string))),
+                        Expression.NotEqual(member, Expression.Constant(string.Empty)));
+                case FilterType.Like:
+                    return StringCall(member, nameof(string.Contains), value);
                 case FilterType.StartsWith:
-                    {
-                        return Expression.Equal(
-                            Expression.Call(
-                                Expression.Property(parameter, equalityFilter.Property),
-                                typeof(string).GetMethod("StartsWith", new[] { typeof(string) }),
-                                new Expression[] { Expression.Constant(equalityFilter.Value) }),
-                            Expression.Constant(true));
-                    }
+                    return StringCall(member, nameof(string.StartsWith), value);
+                case FilterType.GreaterThanOrEqualTo:
+                    return Expression.GreaterThanOrEqual(member, CreateTypedConstant(value, member.Type));
+                case FilterType.GreaterThan:
+                    return Expression.GreaterThan(member, CreateTypedConstant(value, member.Type));
+                case FilterType.LessThanOrEqualTo:
+                    return Expression.LessThanOrEqual(member, CreateTypedConstant(value, member.Type));
+                case FilterType.LessThan:
+                    return Expression.LessThan(member, CreateTypedConstant(value, member.Type));
+                case FilterType.In:
+                    return CollectionContains(member, value, negate: false);
+                case FilterType.NotIn:
+                    return CollectionContains(member, value, negate: true);
                 default:
-                    {
-                        return null;
-                    }
+                    throw new NotSupportedException($"Filter operator '{filter.Filter}' is not supported.");
             }
+        }
+
+        private static Expression GetProperty(Expression parameter, string propertyPath)
+        {
+            Expression current = parameter;
+            foreach (var segment in propertyPath.Split('.', StringSplitOptions.RemoveEmptyEntries))
+                current = Expression.PropertyOrField(current, segment);
+            return current;
+        }
+
+        private static Expression NullCheck(Expression member, bool isNull)
+        {
+            var nullable = !member.Type.IsValueType || Nullable.GetUnderlyingType(member.Type) is not null;
+            if (!nullable)
+                return Expression.Constant(!isNull);
+
+            var comparison = Expression.Equal(member, Expression.Constant(null, member.Type));
+            return isNull ? comparison : Expression.Not(comparison);
+        }
+
+        private static Expression CreateTypedConstant(object value, Type targetType)
+        {
+            var underlyingType = Nullable.GetUnderlyingType(targetType);
+            var conversionType = underlyingType ?? targetType;
+            var converted = value;
+
+            if (!conversionType.IsInstanceOfType(value))
+            {
+                if (conversionType.IsEnum)
+                    converted = value is string text
+                        ? Enum.Parse(conversionType, text, ignoreCase: true)
+                        : Enum.ToObject(conversionType, value);
+                else
+                    converted = Convert.ChangeType(value, conversionType, System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            var constant = Expression.Constant(converted, conversionType);
+            return underlyingType is null ? constant : Expression.Convert(constant, targetType);
+        }
+
+        private static Expression StringCall(Expression member, string methodName, object value)
+        {
+            if (member.Type != typeof(string))
+                throw new InvalidOperationException($"String operator '{methodName}' requires a string property.");
+            if (value is not string text)
+                throw new ArgumentException("A string filter requires a non-null string value.", nameof(value));
+
+            var method = typeof(string).GetMethod(methodName, new[] { typeof(string) });
+            var call = Expression.Call(member, method, Expression.Constant(text));
+            return Expression.AndAlso(
+                Expression.NotEqual(member, Expression.Constant(null, typeof(string))),
+                call);
+        }
+
+        private static Expression CollectionContains(Expression member, object values, bool negate)
+        {
+            if (values is not System.Collections.IEnumerable enumerable || values is string)
+                throw new ArgumentException("IN/NOT IN requires a non-string enumerable value.", nameof(values));
+
+            var elementType = Nullable.GetUnderlyingType(member.Type) ?? member.Type;
+            var items = enumerable.Cast<object?>().ToArray();
+            var includesNull = items.Any(item => item is null);
+            var nonNullItems = items.Where(item => item is not null).ToArray();
+            var typedValues = Array.CreateInstance(elementType, nonNullItems.Length);
+            for (var index = 0; index < nonNullItems.Length; index++)
+                typedValues.SetValue(ConvertCollectionValue(nonNullItems[index]!, elementType), index);
+
+            Expression contains = Expression.Constant(false);
+            if (nonNullItems.Length > 0)
+            {
+                var containsMethod = typeof(Enumerable).GetMethods()
+                    .Single(method => method.Name == nameof(Enumerable.Contains) && method.GetParameters().Length == 2)
+                    .MakeGenericMethod(elementType);
+
+                Expression searchedMember = Nullable.GetUnderlyingType(member.Type) is null
+                    ? member
+                    : Expression.Property(member, "Value");
+                contains = Expression.Call(containsMethod, Expression.Constant(typedValues), searchedMember);
+                if (Nullable.GetUnderlyingType(member.Type) is not null)
+                    contains = Expression.AndAlso(Expression.Property(member, "HasValue"), contains);
+            }
+
+            if (includesNull && (!member.Type.IsValueType || Nullable.GetUnderlyingType(member.Type) is not null))
+                contains = Expression.OrElse(contains, NullCheck(member, isNull: true));
+
+            return negate ? Expression.Not(contains) : contains;
+        }
+
+        private static object ConvertCollectionValue(object value, Type elementType)
+        {
+            if (elementType.IsInstanceOfType(value)) return value;
+            if (elementType.IsEnum)
+                return value is string text ? Enum.Parse(elementType, text, true) : Enum.ToObject(elementType, value);
+            return Convert.ChangeType(value, elementType, System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }
