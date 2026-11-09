@@ -207,7 +207,7 @@ namespace XFrame.Persistence.EFCore
         private void UpdateEntityGraph<TDomain>(TDomain domain)
             where TDomain : class
         {
-            _context.ChangeTracker.TrackGraph(domain, node =>
+            _context.ChangeTracker.TrackGraph(domain, true, node =>
             {
                 var entry = node.Entry;
                 var primaryKey = entry.Metadata.FindPrimaryKey();
@@ -237,13 +237,13 @@ namespace XFrame.Persistence.EFCore
                 if (existingEntity == null)
                 {
                     entry.State = EntityState.Added;
-                    return;
+                    return true;
                 }
 
                 if (ReferenceEquals(existingEntity, entry.Entity))
                 {
                     entry.State = EntityState.Modified;
-                    return;
+                    return true;
                 }
 
                 var trackedEntityEntry = existingEntry ?? _context.Entry(existingEntity);
@@ -251,6 +251,7 @@ namespace XFrame.Persistence.EFCore
                 ReplaceGraphReference(node, existingEntity);
 
                 trackedEntityEntry.State = EntityState.Modified;
+                return true;
             });
         }
 
