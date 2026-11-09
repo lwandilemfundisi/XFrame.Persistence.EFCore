@@ -236,23 +236,57 @@ namespace XFrame.Persistence.EFCore
 
                 if (existingEntity == null)
                 {
+                    ApplyRelationshipForeignKey(node, entry);
                     entry.State = EntityState.Added;
                     return true;
                 }
 
                 if (ReferenceEquals(existingEntity, entry.Entity))
                 {
+                    ApplyRelationshipForeignKey(node, entry);
                     entry.State = EntityState.Modified;
                     return true;
                 }
 
                 var trackedEntityEntry = existingEntry ?? _context.Entry(existingEntity);
                 trackedEntityEntry.CurrentValues.SetValues(entry.Entity);
+                ApplyRelationshipForeignKey(node, trackedEntityEntry);
                 ReplaceGraphReference(node, existingEntity);
 
                 trackedEntityEntry.State = EntityState.Modified;
                 return true;
             });
+        }
+
+        private static void ApplyRelationshipForeignKey(
+            EntityEntryGraphNode node,
+            EntityEntry targetEntry)
+        {
+            if (node.SourceEntry == null ||
+                node.InboundNavigation is not Microsoft.EntityFrameworkCore.Metadata.INavigation navigation)
+            {
+                return;
+            }
+
+            var foreignKey = navigation.ForeignKey;
+            if (navigation.IsOnDependent)
+            {
+                foreach (var (foreignKeyProperty, principalKeyProperty) in
+                         foreignKey.Properties.Zip(foreignKey.PrincipalKey.Properties))
+                {
+                    node.SourceEntry.Property(foreignKeyProperty.Name).CurrentValue =
+                        targetEntry.Property(principalKeyProperty.Name).CurrentValue;
+                }
+
+                return;
+            }
+
+            foreach (var (foreignKeyProperty, principalKeyProperty) in
+                     foreignKey.Properties.Zip(foreignKey.PrincipalKey.Properties))
+            {
+                targetEntry.Property(foreignKeyProperty.Name).CurrentValue =
+                    node.SourceEntry.Property(principalKeyProperty.Name).CurrentValue;
+            }
         }
 
         private static void ReplaceGraphReference(
