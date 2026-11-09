@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using XFrame.Common;
@@ -15,15 +16,15 @@ namespace XFrame.Persistence.EFCore
         private readonly IUniqueConstraintDetectionStrategy _strategy;
         private readonly TDbContext _context;
         private readonly IConfiguration _configuration;
-
         private readonly AsyncLock _asyncLock = new AsyncLock();
+
+        private bool _disposed;
 
         public EntityFrameworkPersistence(
             ILogger<EntityFrameworkPersistence<TDbContext>> logger,
             IDbContextProvider<TDbContext> contextProvider,
             IUniqueConstraintDetectionStrategy strategy,
-            IConfiguration configuration
-        )
+            IConfiguration configuration)
         {
             _logger = logger;
             _context = contextProvider.CreateContext();
@@ -31,165 +32,291 @@ namespace XFrame.Persistence.EFCore
             _configuration = configuration;
         }
 
-        public Task Dispose(CancellationToken cancellationToken)
+        public async Task Dispose(CancellationToken cancellationToken)
         {
-            if (_context.IsNotNull())
+            if (_disposed)
+                return;
+
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
+            {
+                if (_disposed)
+                    return;
+
                 _context.Dispose();
-
-            return Task.FromResult(0);
-        }
-
-        public async Task Delete<TDomain>(TDomain domain, CancellationToken cancellationToken) where TDomain : class
-        {
-            try
-            {
-                _context.Remove(domain);
-                await _context.SaveChangesAsync(cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation(_strategy))
-            {
-                _logger.LogError(
-                    "Entity Framework delete detected an optimistic concurrency " +
-                    "exception for entity with ID '{0}'", domain.GetType().GetProperty("Id").GetValue(domain));
-                throw new OptimisticConcurrencyException(ex.Message, ex);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    "Entity Framework delete detected an " +
-                    "exception for entity with ID '{0}', message : {1}", domain.GetType().GetProperty("Id").GetValue(domain), ex);
-                throw;
+                _disposed = true;
             }
         }
 
-        public async Task<IEnumerable<TModel>> ExecuteStoredProcedure<TModel>(NamedCriteria namedCriteria, CancellationToken cancellationToken)
-        {
-            try
-            {
-                return await _context
-                    .GetStoredProcedure(namedCriteria.Name)
-                    .WithSqlParams(namedCriteria.Parameters)
-                    .ExecuteStoredProc<TModel>(int.Parse(_configuration["Timeout"].OrDefault("180")));
-            }
-            catch(Exception ex)
-            {
-                _logger.LogError(
-                    "Entity Framework execute stored procedure detected an " +
-                    "exception for stored procedure with name '{0}', message : {1}", namedCriteria.Name, ex);
-                throw;
-            }
-        }
-
-        public async Task<TDomain> Get<TDomain, TDomainCriteria>(TDomainCriteria domainCriteria, CancellationToken cancellationToken)
+        public async Task<TDomain> Get<TDomain, TDomainCriteria>(
+            TDomainCriteria domainCriteria,
+            CancellationToken cancellationToken)
             where TDomain : class
             where TDomainCriteria : DomainCriteria
         {
-            using (await _asyncLock.WaitAsync(cancellationToken).ConfigureAwait(false))
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
             {
+                ThrowIfDisposed();
+
                 return await EntityFrameworkExpressionBuilder
                     .BuildCriteria(
-                    _context.Set<TDomain>(), 
-                    domainCriteria).FirstOrDefaultAsync();
+                        _context.Set<TDomain>(),
+                        domainCriteria)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
-        public async Task<IList<TDomain>> GetAll<TDomain, TDomainCriteria>(TDomainCriteria domainCriteria, CancellationToken cancellationToken)
+        
+        public async Task<IList<TDomain>> GetAll<TDomain, TDomainCriteria>(
+            TDomainCriteria domainCriteria,
+            CancellationToken cancellationToken)
             where TDomain : class
             where TDomainCriteria : DomainCriteria
         {
-            using (await _asyncLock.WaitAsync(cancellationToken).ConfigureAwait(false))
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
             {
+                ThrowIfDisposed();
+
                 return await EntityFrameworkExpressionBuilder
                     .BuildCriteria(
-                    _context.Set<TDomain>(), 
-                    domainCriteria).ToListAsync();
-            }
-        }
-
-        public async Task Save<TDomain>(TDomain domain, CancellationToken cancellationToken) where TDomain : class
-        {
-            try
-            {
-                _context.Add(domain);
-                await _context.SaveChangesAsync(cancellationToken)
+                        _context.Set<TDomain>(),
+                        domainCriteria)
+                    .ToListAsync(cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation(_strategy))
-            {
-                _logger.LogError(
-                    "Entity Framework save detected an optimistic concurrency " +
-                    "exception for entity with ID '{0}'", domain.GetType().GetProperty("Id").GetValue(domain));
-                throw new OptimisticConcurrencyException(ex.Message, ex);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    "Entity Framework save detected an " +
-                    "exception for entity with ID '{0}', message : {1}", domain.GetType().GetProperty("Id").GetValue(domain), ex);
-                throw;
-            }
         }
 
-        public async Task Update<TDomain>(TDomain domain, CancellationToken cancellationToken) where TDomain : class
-        {
-            try
-            {
-                var entry = _context.Entry(domain);
 
-                if (entry.State == EntityState.Detached)
-                {
-                    _context.ChangeTracker.TrackGraph(domain, node =>
+        public async Task Save<TDomain>(
+            TDomain domain,
+            CancellationToken cancellationToken)
+            where TDomain : class
+        {
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
+            {
+                ThrowIfDisposed();
+
+                await ExecuteWriteAsync(
+                    domain,
+                    "save",
+                    async () =>
                     {
-                        if (node.Entry.Entity == domain)
-                        {
-                            node.Entry.State = EntityState.Modified;
-                            return;
-                        }
+                        _context.Add(domain);
 
-                        var primaryKeyProperty = node.Entry.Metadata.FindPrimaryKey().Properties[0];
-                        var primaryKeyValue = node.Entry.CurrentValues[primaryKeyProperty];
+                        await _context.SaveChangesAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+            }
+        }
 
-                        var isExisting = node.Entry.IsKeySet &&
-                                         _context.Find(node.Entry.Metadata.ClrType, primaryKeyValue) != null;
+        public async Task Update<TDomain>(
+            TDomain domain,
+            CancellationToken cancellationToken)
+            where TDomain : class
+        {
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
+            {
+                ThrowIfDisposed();
 
-                        if (isExisting)
-                        {
-                            node.Entry.State = EntityState.Modified;
-                        }
-                        else
-                        {
-                            node.Entry.State = EntityState.Added;
-                        }
-                    });
+                await ExecuteWriteAsync(
+                    domain,
+                    "update",
+                    async () =>
+                    {
+                        UpdateEntityGraph(domain);
 
+                        await _context.SaveChangesAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+            }
+        }
+
+        public async Task Delete<TDomain>(
+            TDomain domain,
+            CancellationToken cancellationToken)
+            where TDomain : class
+        {
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
+            {
+                ThrowIfDisposed();
+
+                await ExecuteWriteAsync(
+                    domain,
+                    "delete",
+                    async () =>
+                    {
+                        _context.Remove(domain);
+
+                        await _context.SaveChangesAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+            }
+        }
+
+        public async Task<IEnumerable<TModel>> ExecuteStoredProcedure<TModel>(
+            NamedCriteria namedCriteria,
+            CancellationToken cancellationToken)
+        {
+            using (await _asyncLock.WaitAsync(cancellationToken)
+                       .ConfigureAwait(false))
+            {
+                ThrowIfDisposed();
+
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var timeout = int.TryParse(
+                        _configuration["Timeout"],
+                        out var configuredTimeout)
+                            ? configuredTimeout
+                            : 180;
+
+                    if (timeout <= 0)
+                        timeout = 180;
+
+                    var result = await _context
+                        .GetStoredProcedure(namedCriteria.Name)
+                        .WithSqlParams(namedCriteria.Parameters)
+                        .ExecuteStoredProc<TModel>(timeout)
+                        .ConfigureAwait(false);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    return result;
                 }
-                else
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Failed to execute stored procedure {ProcedureName}",
+                        namedCriteria.Name);
+
+                    throw;
+                }
+            }
+        }
+
+        private void UpdateEntityGraph<TDomain>(TDomain domain)
+            where TDomain : class
+        {
+            _context.ChangeTracker.TrackGraph(domain, node =>
+            {
+                var entry = node.Entry;
+
+                if (ReferenceEquals(entry.Entity, domain))
                 {
                     entry.State = EntityState.Modified;
+                    return;
                 }
 
-                await _context.SaveChangesAsync(cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (DbUpdateException ex) when (ex.IsUniqueConstraintViolation(_strategy))
+                var primaryKey = entry.Metadata.FindPrimaryKey();
+
+                if (primaryKey == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Entity {entry.Metadata.ClrType.Name} has no primary key.");
+                }
+
+                var keyValues = primaryKey.Properties
+                    .Select(property =>
+                        entry.Property(property.Name).CurrentValue)
+                    .ToArray();
+
+                var existingEntity = _context.Find(
+                    entry.Metadata.ClrType,
+                    keyValues);
+
+                entry.State = existingEntity != null
+                    ? EntityState.Modified
+                    : EntityState.Added;
+            });
+        }
+
+
+        private async Task ExecuteWriteAsync<TDomain>(
+            TDomain domain,
+            string operation,
+            Func<Task> action)
+            where TDomain : class
+        {
+            var entityId = GetEntityId(domain);
+
+            try
             {
-                var id = domain.GetType().GetProperty("Id")?.GetValue(domain) ?? "Unknown";
-                _logger.LogError(
-                    "Entity Framework event update detected an optimistic concurrency " +
-                    "exception for entity with ID '{0}'", id);
-                throw new OptimisticConcurrencyException(ex.Message, ex);
+                await action().ConfigureAwait(false);
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Optimistic concurrency conflict during {Operation} " +
+                    "for entity {EntityType} with ID {EntityId}",
+                    operation,
+                    typeof(TDomain).Name,
+                    entityId);
+
+                throw new OptimisticConcurrencyException(
+                    ex.Message,
+                    ex);
+            }
+            catch (DbUpdateException ex)
+                when (ex.IsUniqueConstraintViolation(_strategy))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Unique constraint violation during {Operation} " +
+                    "for entity {EntityType} with ID {EntityId}",
+                    operation,
+                    typeof(TDomain).Name,
+                    entityId);
+
+                throw new OptimisticConcurrencyException(
+                    ex.Message,
+                    ex);
             }
             catch (Exception ex)
             {
-                var id = domain.GetType().GetProperty("Id")?.GetValue(domain) ?? "Unknown";
                 _logger.LogError(
-                    "Entity Framework update detected an " +
-                    "exception for entity with ID '{0}', message : {1}", id, ex.Message);
+                    ex,
+                    "Entity Framework {Operation} failed for " +
+                    "entity {EntityType} with ID {EntityId}",
+                    operation,
+                    typeof(TDomain).Name,
+                    entityId);
+
                 throw;
             }
         }
 
 
+        private static object GetEntityId<TDomain>(TDomain domain)
+        {
+            try
+            {
+                return domain.GetType()
+                    .GetProperty("Id")?
+                    .GetValue(domain) ?? "Unknown";
+            }
+            catch
+            {
+                return "Unknown";
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(
+                    nameof(EntityFrameworkPersistence<TDbContext>));
+            }
+        }
     }
 }
