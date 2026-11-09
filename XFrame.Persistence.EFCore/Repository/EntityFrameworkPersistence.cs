@@ -264,7 +264,23 @@ namespace XFrame.Persistence.EFCore
             }
 
             var navigation = node.SourceEntry.Navigation(node.InboundNavigation.Name);
-            if (!node.InboundNavigation.IsCollection)
+            var navigationMemberType = node.SourceEntry.Entity.GetType()
+                .GetProperty(node.InboundNavigation.Name)?.PropertyType
+                ?? node.SourceEntry.Entity.GetType()
+                    .GetField(node.InboundNavigation.Name,
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic)?.FieldType;
+            var isCollection = navigation.CurrentValue is IEnumerable &&
+                               navigation.CurrentValue is not string;
+
+            if (navigation.CurrentValue == null && navigationMemberType != null)
+            {
+                isCollection = typeof(IEnumerable).IsAssignableFrom(navigationMemberType) &&
+                               navigationMemberType != typeof(string);
+            }
+
+            if (!isCollection)
             {
                 navigation.CurrentValue = trackedEntity;
                 return;
