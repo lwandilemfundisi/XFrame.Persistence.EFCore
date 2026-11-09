@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System.Collections;
 using XFrame.Common;
 using XFrame.Common.Exceptions;
 using XFrame.Common.Extensions;
@@ -68,7 +69,7 @@ namespace XFrame.Persistence.EFCore
             }
         }
 
-        
+
         public async Task<IList<TDomain>> GetAll<TDomain, TDomainCriteria>(
             TDomainCriteria domainCriteria,
             CancellationToken cancellationToken)
@@ -209,13 +210,6 @@ namespace XFrame.Persistence.EFCore
             _context.ChangeTracker.TrackGraph(domain, node =>
             {
                 var entry = node.Entry;
-
-                if (ReferenceEquals(entry.Entity, domain))
-                {
-                    entry.State = EntityState.Modified;
-                    return;
-                }
-
                 var primaryKey = entry.Metadata.FindPrimaryKey();
 
                 if (primaryKey == null)
@@ -229,14 +223,76 @@ namespace XFrame.Persistence.EFCore
                         entry.Property(property.Name).CurrentValue)
                     .ToArray();
 
-                var existingEntity = _context.Find(
+                var existingEntry = _context.ChangeTracker.Entries()
+                    .FirstOrDefault(trackedEntry =>
+                        trackedEntry.Metadata == entry.Metadata &&
+                        primaryKey.Properties.Select((property, index) =>
+                            Equals(trackedEntry.Property(property.Name).CurrentValue,
+                                keyValues[index])).All(matches => matches));
+
+                var existingEntity = existingEntry?.Entity ?? _context.Find(
                     entry.Metadata.ClrType,
                     keyValues);
 
-                entry.State = existingEntity != null
-                    ? EntityState.Modified
-                    : EntityState.Added;
+                if (existingEntity == null)
+                {
+                    entry.State = EntityState.Added;
+                    return;
+                }
+
+                if (ReferenceEquals(existingEntity, entry.Entity))
+                {
+                    entry.State = EntityState.Modified;
+                    return;
+                }
+
+                var trackedEntityEntry = existingEntry ?? _context.Entry(existingEntity);
+                trackedEntityEntry.CurrentValues.SetValues(entry.Entity);
+                ReplaceGraphReference(node, existingEntity);
+
+                trackedEntityEntry.State = EntityState.Modified;
             });
+        }
+
+        private static void ReplaceGraphReference(
+            EntityEntryGraphNode node,
+            object trackedEntity)
+        {
+            if (node.SourceEntry == null || node.InboundNavigation == null)
+            {
+                return;
+            }
+
+            var navigation = node.SourceEntry.Navigation(node.InboundNavigation.Name);
+            if (!node.InboundNavigation.IsCollection)
+            {
+                navigation.CurrentValue = trackedEntity;
+                return;
+            }
+
+            var collection = navigation.CurrentValue;
+            if (collection is IList list)
+            {
+                var index = list.IndexOf(node.Entry.Entity);
+                if (index >= 0)
+                {
+                    list[index] = trackedEntity;
+                }
+                return;
+            }
+
+            var collectionInterface = collection?.GetType().GetInterfaces()
+                .FirstOrDefault(type => type.IsGenericType &&
+                    type.GetGenericTypeDefinition() == typeof(ICollection<>));
+            if (collection == null || collectionInterface == null)
+            {
+                return;
+            }
+
+            collectionInterface.GetMethod(nameof(ICollection<object>.Remove))!
+                .Invoke(collection, new[] { node.Entry.Entity });
+            collectionInterface.GetMethod(nameof(ICollection<object>.Add))!
+                .Invoke(collection, new[] { trackedEntity });
         }
 
 
