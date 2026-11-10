@@ -38,7 +38,7 @@ public sealed class EntityCriteriaBuilder<TEntity> where TEntity : class
         var child = new EntityCriteriaBuilder<TElement>();
         configure(child);
         var predicate = child.Build();
-        if (predicate is not null) _builder.Where(FilterTree.CreateAny(PropertyPath(navigation), predicate));
+        if (predicate is not null) _builder.Where(new AnyFilter(PropertyPath(navigation), predicate));
         return this;
     }
 
@@ -53,7 +53,7 @@ public sealed class EntityCriteriaBuilder<TEntity> where TEntity : class
         var child = new EntityCriteriaBuilder<TEntity>();
         configure(child);
         var filter = child.Build(op == FilterLogicalOperator.Not ? FilterLogicalOperator.And : op);
-        if (filter is not null) _builder.Where(op == FilterLogicalOperator.Not ? FilterTree.CreateGroup(op, filter) : filter);
+        if (filter is not null) _builder.Where(op == FilterLogicalOperator.Not ? new LogicalFilter(op, filter) : filter);
         return this;
     }
 

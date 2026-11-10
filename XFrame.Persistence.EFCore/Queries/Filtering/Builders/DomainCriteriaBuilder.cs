@@ -49,7 +49,7 @@ public sealed class DomainCriteriaBuilder
     {
         if (_filters.Count == 0) return null;
         if (_filters.Count == 1) return _filters[0];
-        return FilterTree.CreateGroup(logicalOperator, _filters.ToArray());
+        return new LogicalFilter(logicalOperator, _filters.ToArray());
     }
 
     private DomainCriteriaBuilder AddGroup(FilterLogicalOperator logicalOperator, Action<DomainCriteriaBuilder> configure)
@@ -62,7 +62,7 @@ public sealed class DomainCriteriaBuilder
             : nested.Build(logicalOperator);
         if (filter is null) return this;
         _filters.Add(logicalOperator == FilterLogicalOperator.Not
-            ? FilterTree.CreateGroup(FilterLogicalOperator.Not, filter)
+            ? new LogicalFilter(FilterLogicalOperator.Not, filter)
             : filter);
         return this;
     }

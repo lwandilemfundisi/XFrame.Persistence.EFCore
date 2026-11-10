@@ -2,8 +2,6 @@ using XFrame.Persistence.Queries.Filterings;
 
 namespace XFrame.Persistence.EFCore.Queries.Filtering;
 
-public enum FilterLogicalOperator { And, Or, Not }
-
 /// <summary>Stores package-local nodes inside the public filter contract of XFrame.Persistence.</summary>
 internal static class FilterTree
 {

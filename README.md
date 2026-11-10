@@ -354,7 +354,7 @@ The custom strategy must implement `IUniqueConstraintDetectionStrategy`; the cus
 
 The fluent builder creates filter nodes, not raw SQL. The EF Core expression builder translates supported nodes into LINQ expressions:
 
-- Fluent logical groups become `AndAlso`, `OrElse`, or `Not`.
+- `LogicalFilter` becomes `AndAlso`, `OrElse`, or `Not`.
 - Existing `AndFilter` becomes `AndAlso`.
 - `EqualityFilter` becomes a comparison, string operation, or collection-membership expression.
 - Existing `NullFilter` becomes a null check.

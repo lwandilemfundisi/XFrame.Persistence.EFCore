@@ -110,9 +110,9 @@ namespace XFrame.Persistence.EFCore
 
         private static Expression BuildExpression<TDomain>(BaseFilter filter, ParameterExpression parameter) where TDomain : class
         {
-            if (FilterTree.TryGet(filter, out var node) && node is FilterTree.Group logicalFilter)
+            if (filter is LogicalFilter logicalFilter)
             {
-                var children = logicalFilter.Children
+                var children = logicalFilter.Filters
                     .Select(child => BuildExpression<TDomain>(child, parameter))
                     .ToArray();
 
@@ -135,7 +135,7 @@ namespace XFrame.Persistence.EFCore
                     BuildExpression<TDomain>(andFilter.RightFilter, parameter));
             }
 
-            if (FilterTree.TryGet(filter, out node) && node is FilterTree.Any anyFilter)
+            if (filter is AnyFilter anyFilter)
             {
                 var collection = GetProperty(parameter, anyFilter.Property);
                 var elementType = collection.Type.IsArray
