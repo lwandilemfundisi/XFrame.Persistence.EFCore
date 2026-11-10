@@ -24,8 +24,8 @@ public sealed class DomainCriteriaBuilder
         return this;
     }
 
-    public DomainCriteriaBuilder Equal(string property, object? value) => Compare(property, value, FilterType.Equal);
-    public DomainCriteriaBuilder NotEqual(string property, object? value) => Compare(property, value, FilterType.NotEqual);
+    public DomainCriteriaBuilder Equal(string property, object value) => Compare(property, value, FilterType.Equal);
+    public DomainCriteriaBuilder NotEqual(string property, object value) => Compare(property, value, FilterType.NotEqual);
     public DomainCriteriaBuilder In<T>(string property, IEnumerable<T> values) => Compare(property, Materialize(values), FilterType.In);
     public DomainCriteriaBuilder NotIn<T>(string property, IEnumerable<T> values) => Compare(property, Materialize(values), FilterType.NotIn);
     public DomainCriteriaBuilder GreaterThan(string property, object value) => Compare(property, value, FilterType.GreaterThan);
@@ -43,13 +43,13 @@ public sealed class DomainCriteriaBuilder
     public DomainCriteriaBuilder Not(Action<DomainCriteriaBuilder> configure) => AddGroup(FilterLogicalOperator.Not, configure);
 
     /// <summary>Builds all top-level conditions as an AND group.</summary>
-    public BaseFilter? Build() => Build(FilterLogicalOperator.And);
+    public BaseFilter Build() => Build(FilterLogicalOperator.And);
 
-    private BaseFilter? Build(FilterLogicalOperator logicalOperator)
+    internal BaseFilter Build(FilterLogicalOperator logicalOperator)
     {
         if (_filters.Count == 0) return null;
         if (_filters.Count == 1) return _filters[0];
-        return new LogicalFilter(logicalOperator, _filters.ToArray());
+        return FilterTree.CreateGroup(logicalOperator, _filters.ToArray());
     }
 
     private DomainCriteriaBuilder AddGroup(FilterLogicalOperator logicalOperator, Action<DomainCriteriaBuilder> configure)
@@ -62,12 +62,12 @@ public sealed class DomainCriteriaBuilder
             : nested.Build(logicalOperator);
         if (filter is null) return this;
         _filters.Add(logicalOperator == FilterLogicalOperator.Not
-            ? new LogicalFilter(FilterLogicalOperator.Not, filter)
+            ? FilterTree.CreateGroup(FilterLogicalOperator.Not, filter)
             : filter);
         return this;
     }
 
-    private DomainCriteriaBuilder Compare(string property, object? value, FilterType filterType)
+    private DomainCriteriaBuilder Compare(string property, object value, FilterType filterType)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(property);
         _filters.Add(new EqualityFilter(property, value, filterType));

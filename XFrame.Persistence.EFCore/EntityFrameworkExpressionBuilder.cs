@@ -110,9 +110,9 @@ namespace XFrame.Persistence.EFCore
 
         private static Expression BuildExpression<TDomain>(BaseFilter filter, ParameterExpression parameter) where TDomain : class
         {
-            if (filter is LogicalFilter logicalFilter)
+            if (FilterTree.TryGet(filter, out var node) && node is FilterTree.Group logicalFilter)
             {
-                var children = logicalFilter.Filters
+                var children = logicalFilter.Children
                     .Select(child => BuildExpression<TDomain>(child, parameter))
                     .ToArray();
 
@@ -133,6 +133,23 @@ namespace XFrame.Persistence.EFCore
                 return Expression.AndAlso(
                     BuildExpression<TDomain>(andFilter.LeftFilter, parameter),
                     BuildExpression<TDomain>(andFilter.RightFilter, parameter));
+            }
+
+            if (FilterTree.TryGet(filter, out node) && node is FilterTree.Any anyFilter)
+            {
+                var collection = GetProperty(parameter, anyFilter.Property);
+                var elementType = collection.Type.IsArray
+                    ? collection.Type.GetElementType()!
+                    : collection.Type.GetInterfaces().Append(collection.Type)
+                        .FirstOrDefault(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))?.GetGenericArguments()[0]
+                        ?? throw new InvalidOperationException($"Property '{anyFilter.Property}' is not a generic enumerable navigation.");
+                var elementParameter = Expression.Parameter(elementType, "item");
+                var predicate = BuildExpression<object>(anyFilter.Predicate, elementParameter);
+                var lambda = Expression.Lambda(predicate, elementParameter);
+                var anyMethod = typeof(Enumerable).GetMethods()
+                    .Single(method => method.Name == nameof(Enumerable.Any) && method.GetParameters().Length == 2)
+                    .MakeGenericMethod(elementType);
+                return Expression.Call(anyMethod, collection, lambda);
             }
 
             if (filter is EqualityFilter equalityFilter)

@@ -2,13 +2,6 @@ using XFrame.Persistence.Queries.Filterings;
 
 namespace XFrame.Persistence.EFCore.Queries.Filtering;
 
-public enum FilterLogicalOperator
-{
-    And,
-    Or,
-    Not
-}
-
 public sealed class LogicalFilter : BaseFilter
 {
     public LogicalFilter(FilterLogicalOperator @operator, params BaseFilter[] filters)

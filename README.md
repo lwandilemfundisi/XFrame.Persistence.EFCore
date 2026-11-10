@@ -122,6 +122,20 @@ using XFrame.Persistence.EFCore.Queries.Filtering.Builders;
 
 `BuildCriteria` creates a filter tree; it does not execute a query. The EF Core persistence implementation translates that tree when the criteria is executed.
 
+### Expression based property selection
+
+Use the generic overload to select properties with expressions. This keeps property references refactor safe and enables predicates over collection navigations:
+
+```csharp
+domainCriteria.BuildCriteria<Order>(criteria => criteria
+    .Equal(order => order.IsActive, true)
+    .Any(order => order.Lines, line => line
+        .Equal(line => line.ProductId, productId)
+        .GreaterThan(line => line.Quantity, 0)));
+```
+
+`Any` adds a predicate over the selected collection. Conditions inside `Any` are combined with `AND`; nested collection `Any` calls are also supported. The expression selector must be a property path; computed expressions and method calls are rejected. The strongly typed `EntityCriteriaBuilder<TEntity>` provides the existing comparison, string, null, conditional, and logical operators using expression selectors.
+
 ### Basic conditions
 
 ```csharp
@@ -340,7 +354,7 @@ The custom strategy must implement `IUniqueConstraintDetectionStrategy`; the cus
 
 The fluent builder creates filter nodes, not raw SQL. The EF Core expression builder translates supported nodes into LINQ expressions:
 
-- `LogicalFilter` becomes `AndAlso`, `OrElse`, or `Not`.
+- Fluent logical groups become `AndAlso`, `OrElse`, or `Not`.
 - Existing `AndFilter` becomes `AndAlso`.
 - `EqualityFilter` becomes a comparison, string operation, or collection-membership expression.
 - Existing `NullFilter` becomes a null check.
@@ -362,7 +376,7 @@ The path must be valid for the queried entity and translatable by the provider.
 - `Contains` and `StartsWith` require string properties and non-null string values. Database collation determines comparison case sensitivity.
 - `In` and `NotIn` require a non-string enumerable. Values are materialized when the builder method is called. Large collections can encounter provider parameter limits or performance issues.
 - `Equal(property, null)` and `IsNull(property)` generate null checks. `NotEqual(property, null)` and `IsNotNull(property)` generate not-null checks.
-- Dotted property paths support nested reference-property access. Collection navigation predicates such as `Any` are not currently exposed by the fluent builder.
+- Dotted string property paths support nested reference-property access. The strongly typed builder also supports collection navigation predicates using `Any`.
 - The current criteria implementation exposes one `Include` property and applies one include expression.
 - The current expression builder applies one configured sort property and direction.
 - Unknown filter nodes and unsupported operators throw rather than being silently ignored.
