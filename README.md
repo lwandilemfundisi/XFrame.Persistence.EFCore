@@ -387,6 +387,12 @@ The path must be valid for the queried entity and translatable by the provider.
 
 Contributions should preserve compatibility with the existing XFrame persistence abstractions and include tests for new filter nodes, nested logical groups, and EF Core provider translation.
 
+Run the filtering composition tests with:
+
+```bash
+dotnet test XFrame.Persistence.EFCore.sln
+```
+
 ## License
 
 Add the repository's applicable license information here before publishing or redistributing the package.

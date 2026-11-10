@@ -12,8 +12,8 @@ public sealed class EntityCriteriaBuilder<TEntity> where TEntity : class
     public EntityCriteriaBuilder<TEntity> Where(BaseFilter filter) { _builder.Where(filter); return this; }
     public EntityCriteriaBuilder<TEntity> Equal<T>(Expression<Func<TEntity, T>> property, T value) => Add(property, value, FilterType.Equal);
     public EntityCriteriaBuilder<TEntity> NotEqual<T>(Expression<Func<TEntity, T>> property, T value) => Add(property, value, FilterType.NotEqual);
-    public EntityCriteriaBuilder<TEntity> In<T>(Expression<Func<TEntity, T>> property, IEnumerable<T> values) => Add(property, values?.ToArray(), FilterType.In);
-    public EntityCriteriaBuilder<TEntity> NotIn<T>(Expression<Func<TEntity, T>> property, IEnumerable<T> values) => Add(property, values?.ToArray(), FilterType.NotIn);
+    public EntityCriteriaBuilder<TEntity> In<T>(Expression<Func<TEntity, T>> property, IEnumerable<T> values) => Add(property, Materialize(values), FilterType.In);
+    public EntityCriteriaBuilder<TEntity> NotIn<T>(Expression<Func<TEntity, T>> property, IEnumerable<T> values) => Add(property, Materialize(values), FilterType.NotIn);
     public EntityCriteriaBuilder<TEntity> GreaterThan<T>(Expression<Func<TEntity, T>> property, T value) => Add(property, value, FilterType.GreaterThan);
     public EntityCriteriaBuilder<TEntity> GreaterThanOrEqual<T>(Expression<Func<TEntity, T>> property, T value) => Add(property, value, FilterType.GreaterThanOrEqualTo);
     public EntityCriteriaBuilder<TEntity> LessThan<T>(Expression<Func<TEntity, T>> property, T value) => Add(property, value, FilterType.LessThan);
@@ -47,6 +47,12 @@ public sealed class EntityCriteriaBuilder<TEntity> where TEntity : class
     private EntityCriteriaBuilder<TEntity> Add<T>(Expression<Func<TEntity, T>> property, object value, FilterType type)
     { _builder.Where(new EqualityFilter(PropertyPath(property), value, type)); return this; }
 
+    private static T[] Materialize<T>(IEnumerable<T> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        return values as T[] ?? values.ToArray();
+    }
+
     private EntityCriteriaBuilder<TEntity> Group(FilterLogicalOperator op, Action<EntityCriteriaBuilder<TEntity>> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
@@ -60,6 +66,7 @@ public sealed class EntityCriteriaBuilder<TEntity> where TEntity : class
     internal static string PropertyPath<T>(Expression<Func<TEntity, T>> expression) => PropertyPath((LambdaExpression)expression);
     private static string PropertyPath(LambdaExpression expression)
     {
+        ArgumentNullException.ThrowIfNull(expression);
         Expression node = expression.Body;
         while (node is UnaryExpression unary && (unary.NodeType == ExpressionType.Convert || unary.NodeType == ExpressionType.ConvertChecked)) node = unary.Operand;
         var names = new Stack<string>();
